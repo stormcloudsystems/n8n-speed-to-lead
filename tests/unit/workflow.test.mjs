@@ -52,7 +52,7 @@ test('W6 failures stop the execution (Stop and Error after the 502 response)', (
   assert.equal(node('n8n-nodes-base.stopAndError').length, 1);
 });
 
-// n8n Creator Hub sticky-note guidelines (read 2026-10-20, see channel/RULES.md).
+// n8n Creator Hub sticky-note guidelines (read 2026-10-20).
 test('W7 exactly one yellow overview sticky, top-left, 100-300 words, with How it works + Setup', () => {
   const stickies = node('n8n-nodes-base.stickyNote');
   const yellow = stickies.filter((s) => (s.parameters.color ?? 1) === 1);
