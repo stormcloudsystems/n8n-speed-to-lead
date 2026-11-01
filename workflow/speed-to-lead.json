@@ -1,0 +1,321 @@
+{
+  "id": "SpeedToLeadFree1",
+  "name": "Speed-to-lead notification (free)",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -760,
+        -420
+      ],
+      "parameters": {
+        "color": 1,
+        "width": 480,
+        "height": 640,
+        "content": "## Send an e-mail for every new website lead\n\nYour website form posts a lead (name, e-mail, message) to this workflow. A valid lead becomes one plain-text\ne-mail to the mailbox you choose, with Reply-To set to the lead, so you can answer with one click.\n\n### How it works\n1. **Lead webhook** receives a JSON POST.\n2. **Settings** holds your notification mailbox and sender address.\n3. **Validate lead** checks the fields (lengths, one plain e-mail address, no line breaks in name or e-mail).\n   The recipient never comes from the request.\n4. **Send notification** sends the e-mail through your SMTP server and answers 202.\n   Invalid leads get 400 with reasons; a failed send gets 502 and the execution is marked failed.\n\n### Setup\n1. Open **Settings** and set `notify_to` and `notify_from`.\n2. Open **Send notification** and select or create your SMTP credential.\n3. Publish the workflow and post to `/webhook/speed-to-lead`.\n\nRepeat submissions send repeat e-mails (no deduplication). SMTP acceptance is not proof of inbox delivery."
+      }
+    },
+    {
+      "name": "Section: receive",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        -120
+      ],
+      "parameters": {
+        "color": 7,
+        "width": 600,
+        "height": 280,
+        "content": "## 1. Receive and check the lead\nEdit Settings for your mailbox."
+      }
+    },
+    {
+      "name": "Section: send",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        560,
+        -280
+      ],
+      "parameters": {
+        "color": 7,
+        "width": 700,
+        "height": 560,
+        "content": "## 2. Notify and answer\nOne e-mail per valid lead; 400 or 502 otherwise."
+      }
+    },
+    {
+      "name": "Lead webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -200,
+        0
+      ],
+      "webhookId": "speed-to-lead",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "speed-to-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "notify-to",
+              "name": "notify_to",
+              "type": "string",
+              "value": "leads@example.com"
+            },
+            {
+              "id": "notify-from",
+              "name": "notify_from",
+              "type": "string",
+              "value": "n8n@example.com"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Validate lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Lead policy: pure functions, no I/O. Pasted verbatim into the workflow's Code node by tools/build-workflow.mjs.\n// Decides whether a webhook body is an acceptable lead and builds the one notification e-mail.\n// Recipient and sender come ONLY from the operator's configuration, never from the request.\n\n// body: whole request body, measured as JSON.stringify(body).length (characters), checked before any field.\nconst LIMITS = { name: 100, email: 254, message: 2000, body: 16384 };\n// Single plain address, no display name, no list separators, no whitespace or control characters.\nconst EMAIL_RE = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$/;\n// C0, DEL, C1 (incl. U+0085 NEL) and the Unicode line/paragraph separators U+2028/U+2029.\nconst CTRL_ANY = /[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]/;\nconst CTRL_EXCEPT_NEWLINE = /[\\u0000-\\u0009\\u000b\\u000c\\u000e-\\u001f\\u007f-\\u009f\\u2028\\u2029]/;\n\nfunction validEmail(s) {\n  return typeof s === 'string' && s.length <= LIMITS.email && EMAIL_RE.test(s);\n}\n\nfunction evaluateLead(body, config) {\n  if (!config || !validEmail(config.notify_to) || !validEmail(config.notify_from)) return { ok: false, reasons: ['config_invalid'] };\n  if (body === null || typeof body !== 'object' || Array.isArray(body)) return { ok: false, reasons: ['body_not_object'] };\n  if (JSON.stringify(body).length > LIMITS.body) return { ok: false, reasons: ['body_too_large'] };\n  const reasons = [];\n\n  const name = typeof body.name === 'string' ? body.name.trim() : '';\n  if (!name) reasons.push('name_required');\n  else if (name.length > LIMITS.name) reasons.push('name_too_long');\n  else if (CTRL_ANY.test(name)) reasons.push('name_invalid');\n\n  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';\n  if (!validEmail(email)) reasons.push('email_invalid');\n\n  const message = typeof body.message === 'string' ? body.message.trim() : '';\n  if (!message) reasons.push('message_required');\n  else if (message.length > LIMITS.message) reasons.push('message_too_long');\n  else if (CTRL_EXCEPT_NEWLINE.test(message)) reasons.push('message_invalid');\n\n  if (reasons.length) return { ok: false, reasons };\n  return {\n    ok: true,\n    mail: {\n      to: config.notify_to,\n      from: config.notify_from,\n      replyTo: email,\n      subject: `New lead: ${name}`,\n      text: `New lead from the website form.\\n\\nName: ${name}\\nEmail: ${email}\\n\\nMessage:\\n${message.replace(/\\r\\n?/g, '\\n')}\\n`,\n    },\n  };\n}\n\n// ---- n8n glue ----\nconst body = $('Lead webhook').first().json.body;\nconst config = $('Settings').first().json;\nreturn [{ json: evaluateLead(body, config) }];\n"
+      }
+    },
+    {
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "is-ok",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Send notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        620,
+        -100
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "smtp": {
+          "id": "speedToLeadSmtp1",
+          "name": "SMTP account"
+        }
+      },
+      "parameters": {
+        "fromEmail": "={{ $json.mail.from }}",
+        "toEmail": "={{ $json.mail.to }}",
+        "subject": "={{ $json.mail.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.mail.text }}",
+        "options": {
+          "appendAttribution": false,
+          "replyTo": "={{ $json.mail.replyTo }}"
+        }
+      }
+    },
+    {
+      "name": "Respond 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        860,
+        -200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'accepted' }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      }
+    },
+    {
+      "name": "Respond 502",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        860,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'error', delivered: false }) }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    },
+    {
+      "name": "Mark execution failed",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1080,
+        0
+      ],
+      "parameters": {
+        "errorMessage": "SMTP send failed; no e-mail was delivered for this lead"
+      }
+    },
+    {
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        620,
+        160
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'invalid', reasons: $json.reasons }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Lead webhook": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Validate lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate lead": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Send notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send notification": {
+      "main": [
+        [
+          {
+            "node": "Respond 202",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 502": {
+      "main": [
+        [
+          {
+            "node": "Mark execution failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all"
+  },
+  "tags": []
+}
